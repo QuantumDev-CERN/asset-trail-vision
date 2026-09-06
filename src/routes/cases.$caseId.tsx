@@ -4,8 +4,16 @@ import { caseById, CASES, SCENARIOS } from "@/data/cases";
 import { FlowGraph, GraphLegend } from "@/components/FlowGraph";
 import { EvidencePanel, type Selection } from "@/components/EvidencePanel";
 import { ConfidencePanel } from "@/components/ConfidencePanel";
-import { Chip, DisclosureNote, Panel, PanelHeader, SectionLabel } from "@/components/ui/primitives";
+import { Button, Chip, DisclosureNote, Field, Panel, PanelHeader, SectionLabel } from "@/components/ui/primitives";
 import { bandTone, CHAIN_LABEL, formatDateTime, formatInr, shortAddress } from "@/lib/format";
+import {
+  completeTrace,
+  detectStablecoin,
+  executeFreeze,
+  resetTrace,
+  startTrace,
+  useLiveCase,
+} from "@/lib/live-case";
 
 export const Route = createFileRoute("/cases/$caseId")({
   loader: ({ params }) => {
@@ -37,6 +45,11 @@ function CaseWorkspace() {
   const [selection, setSelection] = useState<Selection>({ type: "node", node: record.nodes[0]! });
   const scenario = SCENARIOS.find((s) => s.key === record.scenario);
   const selectedId = selection?.type === "node" ? selection.node.id : null;
+  const live = useLiveCase(record.id);
+  const stablecoin = detectStablecoin(record);
+  const timeline = [...record.timeline, ...live.events].sort((a, b) => a.at.localeCompare(b.at));
+  const progress =
+    live.status === "idle" ? 0 : Math.round((live.revealed / Math.max(record.edges.length, 1)) * 100);
 
   return (
     <div className="space-y-6">
@@ -70,6 +83,46 @@ function CaseWorkspace() {
         <Meta label="Declared amount" value={formatInr(record.amountInr)} />
       </div>
 
+      <Panel>
+        <PanelHeader
+          title="Live trace run"
+          subtitle={live.jobId ? `Job ${live.jobId}` : "Run the trace hop by hop, as the engine would on intake"}
+          right={
+            <Chip tone={live.status === "complete" ? "success" : live.status === "tracing" ? "warning" : "muted"}>
+              {live.status === "complete" ? "trace complete" : live.status === "tracing" ? "tracing…" : "not started"}
+            </Chip>
+          }
+        />
+        <div className="space-y-3 p-4">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-surface-raised">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${live.status === "idle" ? 0 : progress}%` }}
+            />
+          </div>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            {live.status === "idle"
+              ? `${record.edges.length} hops queued · nothing resolved yet`
+              : `${live.revealed}/${record.edges.length} hops resolved${live.status === "complete" ? ` · terminus ${record.terminus.label}` : ""}`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => startTrace(record)} disabled={live.status === "tracing"}>
+              {live.status === "idle" ? "Run trace" : "Re-run trace"}
+            </Button>
+            {live.status === "tracing" ? (
+              <Button variant="outline" onClick={() => completeTrace(record)}>
+                Skip to result
+              </Button>
+            ) : null}
+            {live.status !== "idle" ? (
+              <Button variant="outline" onClick={() => resetTrace(record.id)}>
+                Reset
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Panel>
+
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <Panel className="overflow-hidden">
           <PanelHeader
@@ -92,6 +145,7 @@ function CaseWorkspace() {
             selectedId={selectedId}
             onSelectNode={(node) => setSelection({ type: "node", node })}
             onSelectEdge={(edge) => setSelection({ type: "edge", edge })}
+            revealedHops={live.status === "idle" ? undefined : live.revealed}
           />
           <div className="border-t border-border px-4 py-3">
             <GraphLegend />
@@ -139,13 +193,53 @@ function CaseWorkspace() {
             </div>
           </Panel>
 
-          {record.freezeRecommendation ? (
+          {record.freezeRecommendation && stablecoin ? (
             <Panel>
-              <PanelHeader title="Parallel action available" subtitle="stablecoin_check.py" />
-              <div className="p-4">
+              <PanelHeader
+                title="Parallel action available"
+                subtitle="stablecoin_check.py"
+                right={
+                  live.freeze ? (
+                    <Chip tone={live.freeze.status === "frozen" ? "success" : "warning"}>
+                      {live.freeze.status === "frozen" ? "funds frozen" : "request sent"}
+                    </Chip>
+                  ) : (
+                    <Chip tone="destructive">action required</Chip>
+                  )
+                }
+              />
+              <div className="space-y-3 p-4">
                 <DisclosureNote title="Runs alongside, never instead of, the VASP route">
                   {record.freezeRecommendation}
                 </DisclosureNote>
+
+                {live.freeze ? (
+                  <div className="space-y-3 rounded-md border border-success/40 bg-success/8 p-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Freeze reference" value={live.freeze.reference} mono />
+                      <Field label="Asset" value={`${live.freeze.standard} ${live.freeze.asset}`} />
+                      <Field label="Issuer" value={live.freeze.issuer} />
+                      <Field label="Amount immobilised" value={live.freeze.amountToken} mono />
+                      <Field label="Target address" value={shortAddress(live.freeze.address, 12, 8)} mono />
+                      <Field label="Declared exposure" value={formatInr(live.freeze.amountInr)} />
+                    </div>
+                    <div className="rounded-md border border-border bg-surface-raised px-3 py-2">
+                      <SectionLabel>Transaction summary</SectionLabel>
+                      <p className="mt-1 text-[11px] leading-relaxed text-foreground/85">
+                        {record.edges.length} classified hops from {shortAddress(record.suspectAddress, 10, 6)} to{" "}
+                        {live.freeze.address === record.terminus.address ? record.terminus.label : "the flagged address"}.
+                        Requested {formatDateTime(live.freeze.requestedAt)}.{" "}
+                        {live.freeze.status === "frozen"
+                          ? `Issuer confirmed the blacklist call at ${formatDateTime(live.freeze.confirmedAt!)} — balance immobilised pending court direction.`
+                          : "Awaiting issuer confirmation — the timeline updates the moment it lands."}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <Button variant="destructive" onClick={() => executeFreeze(record)}>
+                    Immediate freeze — {stablecoin.standard} {stablecoin.asset} detected
+                  </Button>
+                )}
               </div>
             </Panel>
           ) : null}
@@ -173,11 +267,11 @@ function CaseWorkspace() {
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <Panel>
-          <PanelHeader title="Case timeline" subtitle="Every engine action and officer decision, audit-logged" />
+          <PanelHeader title="Case timeline" subtitle={`${timeline.length} entries · every engine action and officer decision, audit-logged`} />
           <ol className="space-y-0 p-4">
-            {record.timeline.map((t, i) => (
+            {timeline.map((t, i) => (
               <li key={t.at + t.title} className="relative flex gap-4 pb-5 last:pb-0">
-                {i < record.timeline.length - 1 ? (
+                {i < timeline.length - 1 ? (
                   <span className="absolute top-4 left-[7px] h-full w-px bg-border" aria-hidden="true" />
                 ) : null}
                 <span className="relative z-10 mt-1.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 border-primary bg-background" />
