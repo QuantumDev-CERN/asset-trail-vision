@@ -31,13 +31,27 @@ export function FlowGraph({
   selectedId,
   onSelectNode,
   onSelectEdge,
+  revealedHops,
 }: {
   record: CaseRecord;
   selectedId: string | null;
   onSelectNode: (node: GraphNode) => void;
   onSelectEdge: (edge: GraphEdge) => void;
+  /** During a live trace run, only the first N hops are resolved. */
+  revealedHops?: number;
 }) {
   const [hoverEdge, setHoverEdge] = useState<string | null>(null);
+  const limit = revealedHops ?? record.edges.length;
+  const resolvedNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    const first = record.nodes.find((n) => n.hop === 0);
+    if (first) for (const n of record.nodes.filter((x) => x.hop === 0)) ids.add(n.id);
+    record.edges.slice(0, limit).forEach((e) => {
+      ids.add(e.from);
+      ids.add(e.to);
+    });
+    return ids;
+  }, [record, limit]);
 
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
