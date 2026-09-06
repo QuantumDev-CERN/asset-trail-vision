@@ -44,8 +44,7 @@ export function FlowGraph({
   const limit = revealedHops ?? record.edges.length;
   const resolvedNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    const first = record.nodes.find((n) => n.hop === 0);
-    if (first) for (const n of record.nodes.filter((x) => x.hop === 0)) ids.add(n.id);
+    for (const n of record.nodes.filter((x) => x.hop === 0)) ids.add(n.id);
     record.edges.slice(0, limit).forEach((e) => {
       ids.add(e.from);
       ids.add(e.to);
@@ -82,7 +81,8 @@ export function FlowGraph({
           </marker>
         </defs>
 
-        {record.edges.map((e) => {
+        {record.edges.map((e, ei) => {
+          const pending = ei >= limit;
           const a = positions.get(e.from);
           const b = positions.get(e.to);
           if (!a || !b) return null;
@@ -96,8 +96,8 @@ export function FlowGraph({
           return (
             <g
               key={e.id}
-              style={{ color: stroke }}
-              className="cursor-pointer"
+              style={{ color: stroke, opacity: pending ? 0.12 : 1 }}
+              className="cursor-pointer transition-opacity duration-500"
               onMouseEnter={() => setHoverEdge(e.id)}
               onMouseLeave={() => setHoverEdge(null)}
               onClick={() => onSelectEdge(e)}
@@ -156,7 +156,8 @@ export function FlowGraph({
             <g
               key={n.id}
               transform={`translate(${p.x}, ${p.y})`}
-              className="cursor-pointer"
+              style={{ opacity: resolvedNodeIds.has(n.id) ? 1 : 0.14 }}
+              className="cursor-pointer transition-opacity duration-500"
               onClick={() => onSelectNode(n)}
               tabIndex={0}
               role="button"
